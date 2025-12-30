@@ -30,12 +30,21 @@ from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.retrieval import (
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 
 # Remove all default handlers then add our own
 logger.remove()
 logger.add(sys.stderr, level='INFO')
+
+# Parse default search type environment variable.
+kb_search_type_raw = os.getenv('BEDROCK_KB_SEARCH_TYPE', 'DEFAULT')
+kb_search_type: Literal['HYBRID', 'SEMANTIC', 'DEFAULT'] = 'DEFAULT'
+if kb_search_type_raw is not None:
+    kb_search_type_raw = kb_search_type_raw.strip().upper()
+    if kb_search_type_raw in ('HYBRID', 'SEMANTIC', 'DEFAULT'):
+        kb_search_type = kb_search_type_raw  # type: ignore[assignment]
+logger.info(f'Default search type: {kb_search_type} (from BEDROCK_KB_SEARCH_TYPE)')
 
 
 global kb_runtime_client
@@ -74,8 +83,9 @@ mcp = FastMCP(
 
     ## Usage Workflow:
     1. ALWAYS start by using the ListKnowledgeBases tool to discover available knowledge bases and their data sources
-    2. Use the QueryKnowledgeBases tool to search specific knowledge bases with your natural language queries
-    3. You can make multiple calls to QueryKnowledgeBases with different queries or targeting different knowledge bases
+    2. Use QueryKnowledgeBasesWithMetadata for an initial discovery pass when you need metadata (date, users, companies, IDs)
+    3. Use QueryKnowledgeBases for content-heavy drill-down after you have identified relevant sources/metadata
+    4. You can make multiple calls with different queries or targeting different knowledge bases
 
     ## Important Notes:
     - Knowledge bases contain structured data from various data sources (documents, websites, databases)
@@ -153,6 +163,15 @@ async def query_knowledge_bases_tool(
         None,
         description='The data source IDs to filter the knowledge base by. It must be a list of valid data source IDs from the ListKnowledgeBases tool',
     ),
+    search_type: Annotated[
+        Literal['HYBRID', 'SEMANTIC', 'DEFAULT'],
+        Field(
+            description=(
+                "Search strategy for retrieval. 'HYBRID' combines keyword + semantic search and is recommended for "
+                "OpenSearch Serverless; 'SEMANTIC' uses embeddings only; 'DEFAULT' lets Bedrock decide."
+            )
+        ),
+    ] = kb_search_type,
 ) -> str:
     """Query an Amazon Bedrock Knowledge Base using natural language.
 
@@ -188,6 +207,78 @@ async def query_knowledge_bases_tool(
         reranking=reranking,
         reranking_model_name=reranking_model_name,
         data_source_ids=data_source_ids,
+        search_type=search_type,
+        include_metadata=False,
+    )
+
+
+@mcp.tool(name='QueryKnowledgeBasesWithMetadata')
+async def query_knowledge_bases_with_metadata_tool(
+    query: str = Field(
+        ..., description='A natural language query to search the knowledge base with'
+    ),
+    knowledge_base_id: str = Field(
+        ...,
+        description='The knowledge base ID to query. It must be a valid ID from the ListKnowledgeBases tool',
+    ),
+    number_of_results: int = Field(
+        6,
+        description='The number of results to return. Prefer smaller values for metadata-driven discovery.',
+    ),
+    reranking: bool = Field(
+        kb_reranking_enabled,
+        description='Whether to rerank the results. Useful for improving relevance and sorting. Can be globally configured with BEDROCK_KB_RERANKING_ENABLED environment variable.',
+    ),
+    reranking_model_name: Literal['COHERE', 'AMAZON'] = Field(
+        'AMAZON',
+        description="The name of the reranking model to use. Options: 'COHERE', 'AMAZON'",
+    ),
+    data_source_ids: Optional[List[str]] = Field(
+        None,
+        description='The data source IDs to filter the knowledge base by. It must be a list of valid data source IDs from the ListKnowledgeBases tool',
+    ),
+    content_max_chars: Optional[int] = Field(
+        600,
+        description='If set, truncate returned TEXT content to this many characters to reduce tool output size.',
+    ),
+    search_type: Annotated[
+        Literal['HYBRID', 'SEMANTIC', 'DEFAULT'],
+        Field(
+            description=(
+                "Search strategy for retrieval. 'HYBRID' combines keyword + semantic search and is recommended for "
+                "OpenSearch Serverless; 'SEMANTIC' uses embeddings only; 'DEFAULT' lets Bedrock decide."
+            )
+        ),
+    ] = kb_search_type,
+) -> str:
+    """Query an Amazon Bedrock Knowledge Base and include metadata in results.
+
+    Use this tool for a discovery pass when you need metadata fields (e.g., date, users, companies, IDs)
+    to filter/sort results. After selecting the most relevant sources, use QueryKnowledgeBases for deeper
+    content retrieval.
+
+    ## Usage Requirements
+    - You MUST first use the ListKnowledgeBases tool to get valid knowledge base IDs
+    - You can query different knowledge bases or make multiple queries to the same knowledge base
+
+    ## Tool output format
+    The response contains multiple JSON objects (one per line), each representing a retrieved document with:
+    - content: The text content of the document (may be truncated by content_max_chars)
+    - location: The source location of the document
+    - metadata: Metadata returned by Bedrock Agent Runtime (may be empty depending on KB configuration)
+    - score: The relevance score of the document
+    """
+    return await query_knowledge_base(
+        query=query,
+        knowledge_base_id=knowledge_base_id,
+        kb_agent_client=kb_runtime_client,
+        number_of_results=number_of_results,
+        reranking=reranking,
+        reranking_model_name=reranking_model_name,
+        data_source_ids=data_source_ids,
+        search_type=search_type,
+        include_metadata=True,
+        content_max_chars=content_max_chars,
     )
 
 

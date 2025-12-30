@@ -21,6 +21,7 @@ from awslabs.bedrock_kb_retrieval_mcp_server.server import (
     main,
     mcp,
     query_knowledge_bases_tool,
+    query_knowledge_bases_with_metadata_tool,
 )
 from unittest import mock
 from unittest.mock import patch
@@ -134,6 +135,53 @@ class TestQueryKnowledgeBasesTool:
             reranking=True,
             reranking_model_name='AMAZON',
             data_source_ids=['ds-12345', 'ds-67890'],
+            search_type='DEFAULT',
+            include_metadata=False,
+        )
+
+
+class TestQueryKnowledgeBasesWithMetadataTool:
+    """Tests for the query_knowledge_bases_with_metadata_tool function."""
+
+    @pytest.mark.asyncio
+    @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.query_knowledge_base')
+    async def test_query_knowledge_bases_with_metadata_tool(self, mock_query_knowledge_base):
+        """Test the query_knowledge_bases_with_metadata_tool function."""
+        mock_query_knowledge_base.return_value = json.dumps(
+            {
+                'content': {'text': 'This is a test document content.', 'type': 'TEXT'},
+                'location': {'s3Location': {'uri': 's3://test-bucket/test-document.txt'}},
+                'metadata': {'date': '2025-01-01'},
+                'score': 0.95,
+            }
+        )
+
+        result = await query_knowledge_bases_with_metadata_tool(
+            query='test query',
+            knowledge_base_id='kb-12345',
+            number_of_results=6,
+            reranking=False,
+            reranking_model_name='AMAZON',
+            data_source_ids=None,
+            content_max_chars=200,
+        )
+
+        assert 'This is a test document content.' in result
+        assert 's3://test-bucket/test-document.txt' in result
+        assert '2025-01-01' in result
+        assert '0.95' in result
+
+        mock_query_knowledge_base.assert_called_once_with(
+            query='test query',
+            knowledge_base_id='kb-12345',
+            kb_agent_client=mock.ANY,
+            number_of_results=6,
+            reranking=False,
+            reranking_model_name='AMAZON',
+            data_source_ids=None,
+            search_type='DEFAULT',
+            include_metadata=True,
+            content_max_chars=200,
         )
 
 

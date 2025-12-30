@@ -15,6 +15,7 @@ MCP server for accessing Amazon Bedrock Knowledge Bases
 - Retrieve information using conversational queries
 - Get relevant passages from your knowledge bases
 - Access citation information for all results
+- Use `QueryKnowledgeBasesWithMetadata` for discovery when you need metadata fields (date, users, companies, IDs)
 
 ### Filter results by data source
 
@@ -67,6 +68,16 @@ The environment variable accepts various formats:
 
 This setting provides a global default, while individual API calls can still override it by explicitly setting the `reranking` parameter.
 
+### Controlling Search Type (Hybrid vs Semantic)
+
+You can control the Bedrock Knowledge Base retrieval strategy using the `BEDROCK_KB_SEARCH_TYPE` environment variable:
+
+- `DEFAULT` (default): do not set an override; let Bedrock choose a strategy
+- `HYBRID`: combines keyword + semantic search (recommended for OpenSearch Serverless)
+- `SEMANTIC`: embeddings-only semantic search
+
+This setting provides a global default, while individual tool calls can override it by explicitly setting the `search_type` parameter on `QueryKnowledgeBases` / `QueryKnowledgeBasesWithMetadata`.
+
 For detailed instructions on setting up knowledge bases, see:
 
 - [Create a knowledge base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-create.html)
@@ -92,7 +103,8 @@ Configure the MCP server in your MCP client configuration (e.g., for Amazon Q De
         "AWS_REGION": "us-east-1",
         "FASTMCP_LOG_LEVEL": "ERROR",
         "KB_INCLUSION_TAG_KEY": "optional-tag-key-to-filter-kbs",
-        "BEDROCK_KB_RERANKING_ENABLED": "false"
+        "BEDROCK_KB_RERANKING_ENABLED": "false",
+        "BEDROCK_KB_SEARCH_TYPE": "HYBRID"
       },
       "disabled": false,
       "autoApprove": []

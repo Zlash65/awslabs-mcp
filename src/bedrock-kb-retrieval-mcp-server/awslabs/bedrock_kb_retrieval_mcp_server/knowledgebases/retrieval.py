@@ -34,6 +34,9 @@ async def query_knowledge_base(
     reranking: bool = False,
     reranking_model_name: Literal['COHERE', 'AMAZON'] = 'AMAZON',
     data_source_ids: list[str] | None = None,
+    search_type: Literal['HYBRID', 'SEMANTIC', 'DEFAULT'] = 'DEFAULT',
+    include_metadata: bool = False,
+    content_max_chars: int | None = None,
 ) -> str:
     """# Amazon Bedrock Knowledge Base query tool.
 
@@ -45,6 +48,11 @@ async def query_knowledge_base(
         reranking (bool): Whether to rerank the results. Can be globally configured using the BEDROCK_KB_RERANKING_ENABLED environment variable.
         reranking_model_name (Literal['COHERE', 'AMAZON']): The name of the reranking model to use.
         data_source_ids (list[str] | None): The data source IDs to filter the knowledge base by.
+        search_type (Literal['HYBRID', 'SEMANTIC', 'DEFAULT']): Search strategy for retrieval. If set to
+            'DEFAULT', no override is sent and Bedrock chooses a strategy. If set to 'HYBRID' or 'SEMANTIC',
+            the request includes an explicit override.
+        include_metadata (bool): If True, include Bedrock-returned metadata alongside each result.
+        content_max_chars (int | None): If set, truncate returned TEXT content to this many characters.
 
     ## Warning: You must use the `ListKnowledgeBases` tool to get the knowledge base ID and optionally a data source ID first.
 
@@ -67,6 +75,9 @@ async def query_knowledge_base(
             'numberOfResults': number_of_results,
         }
     }
+
+    if search_type in ('HYBRID', 'SEMANTIC'):
+        retrieve_request['vectorSearchConfiguration']['overrideSearchType'] = search_type  # type: ignore
 
     if data_source_ids:
         retrieve_request['vectorSearchConfiguration']['filter'] = {  # type: ignore
@@ -102,12 +113,19 @@ async def query_knowledge_base(
             logger.warning('Images are not supported at this time. Skipping...')
             continue
         else:
-            documents.append(
-                {
-                    'content': result['content'],
-                    'location': result.get('location', ''),
-                    'score': result.get('score', ''),
-                }
-            )
+            content = result['content']
+            if content_max_chars and isinstance(content, dict) and content.get('type') == 'TEXT':
+                text = content.get('text') or ''
+                if isinstance(text, str) and len(text) > content_max_chars:
+                    content = {**content, 'text': text[:content_max_chars] + '…'}
+
+            document = {
+                'content': content,
+                'location': result.get('location', ''),
+                'score': result.get('score', ''),
+            }
+            if include_metadata:
+                document['metadata'] = result.get('metadata', {})
+            documents.append(document)
 
     return '\n\n'.join([json.dumps(document) for document in documents])

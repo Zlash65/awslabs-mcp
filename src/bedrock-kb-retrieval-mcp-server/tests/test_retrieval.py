@@ -76,6 +76,7 @@ class TestQueryKnowledgeBase:
             reranking=True,
             reranking_model_name='COHERE',
             data_source_ids=['ds-12345', 'ds-67890'],
+            search_type='HYBRID',
         )
 
         # Parse the result as JSON
@@ -91,6 +92,7 @@ class TestQueryKnowledgeBase:
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
                     'numberOfResults': 10,
+                    'overrideSearchType': 'HYBRID',
                     'filter': {
                         'in': {
                             'key': 'x-amz-bedrock-kb-data-source-id',
@@ -197,3 +199,30 @@ class TestQueryKnowledgeBase:
         assert documents[0]['content']['type'] == 'TEXT'
         assert documents[0]['location']['s3Location']['uri'] == 's3://test-bucket/document.txt'
         assert documents[0]['score'] == 0.85
+
+    @pytest.mark.asyncio
+    async def test_query_knowledge_base_includes_metadata_when_enabled(
+        self, mock_bedrock_agent_runtime_client
+    ):
+        """Test that metadata is included in results when include_metadata=True."""
+        mock_bedrock_agent_runtime_client.retrieve.return_value = {
+            'retrievalResults': [
+                {
+                    'content': {'text': 'This is a test document content.', 'type': 'TEXT'},
+                    'location': {'s3Location': {'uri': 's3://test-bucket/test-document.txt'}},
+                    'score': 0.95,
+                    'metadata': {'date': '2025-01-01'},
+                }
+            ]
+        }
+
+        result = await query_knowledge_base(
+            query='test query',
+            knowledge_base_id='kb-12345',
+            kb_agent_client=mock_bedrock_agent_runtime_client,
+            include_metadata=True,
+        )
+
+        documents = [json.loads(doc) for doc in result.split('\n\n')]
+        assert len(documents) == 1
+        assert documents[0]['metadata']['date'] == '2025-01-01'

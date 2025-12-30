@@ -36,11 +36,15 @@ class TestEnvironmentVariableConfig:
         """Clean up environment variables before each test."""
         if 'BEDROCK_KB_RERANKING_ENABLED' in os.environ:
             del os.environ['BEDROCK_KB_RERANKING_ENABLED']
+        if 'BEDROCK_KB_SEARCH_TYPE' in os.environ:
+            del os.environ['BEDROCK_KB_SEARCH_TYPE']
 
     def teardown_method(self):
         """Clean up environment variables after each test."""
         if 'BEDROCK_KB_RERANKING_ENABLED' in os.environ:
             del os.environ['BEDROCK_KB_RERANKING_ENABLED']
+        if 'BEDROCK_KB_SEARCH_TYPE' in os.environ:
+            del os.environ['BEDROCK_KB_SEARCH_TYPE']
 
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_runtime_client')
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_client')
@@ -53,6 +57,27 @@ class TestEnvironmentVariableConfig:
 
         # Verify that the default value is False when the env var is not set
         assert awslabs.bedrock_kb_retrieval_mcp_server.server.kb_reranking_enabled is False
+
+    @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_runtime_client')
+    @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_client')
+    def test_default_search_type_is_default(self, mock_agent_client, mock_runtime_client):
+        """Test that the default search type is DEFAULT when no env var is set."""
+        import awslabs.bedrock_kb_retrieval_mcp_server.server
+
+        importlib.reload(awslabs.bedrock_kb_retrieval_mcp_server.server)
+
+        assert awslabs.bedrock_kb_retrieval_mcp_server.server.kb_search_type == 'DEFAULT'
+
+    @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_runtime_client')
+    @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_client')
+    def test_search_type_can_be_set_to_hybrid(self, mock_agent_client, mock_runtime_client):
+        """Test that search type can be configured to HYBRID via env var."""
+        os.environ['BEDROCK_KB_SEARCH_TYPE'] = 'HYBRID'
+        import awslabs.bedrock_kb_retrieval_mcp_server.server
+
+        importlib.reload(awslabs.bedrock_kb_retrieval_mcp_server.server)
+
+        assert awslabs.bedrock_kb_retrieval_mcp_server.server.kb_search_type == 'HYBRID'
 
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_runtime_client')
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_client')
