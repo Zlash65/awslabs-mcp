@@ -38,6 +38,16 @@ class TestEnvironmentVariableConfig:
             del os.environ['BEDROCK_KB_RERANKING_ENABLED']
         if 'BEDROCK_KB_SEARCH_TYPE' in os.environ:
             del os.environ['BEDROCK_KB_SEARCH_TYPE']
+        if 'BEDROCK_KB_ALLOW_RAW_FILTER' in os.environ:
+            del os.environ['BEDROCK_KB_ALLOW_RAW_FILTER']
+        if 'BEDROCK_KB_SCHEMA_MAP_JSON' in os.environ:
+            del os.environ['BEDROCK_KB_SCHEMA_MAP_JSON']
+        if 'BEDROCK_KB_SCHEMA_DEFAULT_PATH' in os.environ:
+            del os.environ['BEDROCK_KB_SCHEMA_DEFAULT_PATH']
+        if 'BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN' in os.environ:
+            del os.environ['BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN']
+        if 'BEDROCK_KB_FILTER_MODE' in os.environ:
+            del os.environ['BEDROCK_KB_FILTER_MODE']
 
     def teardown_method(self):
         """Clean up environment variables after each test."""
@@ -45,6 +55,16 @@ class TestEnvironmentVariableConfig:
             del os.environ['BEDROCK_KB_RERANKING_ENABLED']
         if 'BEDROCK_KB_SEARCH_TYPE' in os.environ:
             del os.environ['BEDROCK_KB_SEARCH_TYPE']
+        if 'BEDROCK_KB_ALLOW_RAW_FILTER' in os.environ:
+            del os.environ['BEDROCK_KB_ALLOW_RAW_FILTER']
+        if 'BEDROCK_KB_SCHEMA_MAP_JSON' in os.environ:
+            del os.environ['BEDROCK_KB_SCHEMA_MAP_JSON']
+        if 'BEDROCK_KB_SCHEMA_DEFAULT_PATH' in os.environ:
+            del os.environ['BEDROCK_KB_SCHEMA_DEFAULT_PATH']
+        if 'BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN' in os.environ:
+            del os.environ['BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN']
+        if 'BEDROCK_KB_FILTER_MODE' in os.environ:
+            del os.environ['BEDROCK_KB_FILTER_MODE']
 
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_runtime_client')
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_client')

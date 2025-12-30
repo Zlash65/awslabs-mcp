@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "metadata": {
+    "date": {
+      "type": "STRING",
+      "description": "ISO date for the record (YYYY-MM-DD). Recommended for range filtering on time-bounded queries.",
+      "allowed_operators": [
+        "equals",
+        "notEquals",
+        "greaterThan",
+        "greaterThanOrEquals",
+        "lessThan",
+        "lessThanOrEquals",
+        "in",
+        "notIn",
+        "startsWith",
+        "stringContains"
+      ]
+    },
+    "title": {
+      "type": "STRING",
+      "description": "Human-readable title (e.g., document title, meeting name, email subject).",
+      "allowed_operators": ["equals", "notEquals", "startsWith", "stringContains", "in", "notIn"]
+    },
+    "participant_ids": {
+      "type": "STRING",
+      "description": "Tokenized participant IDs; commonly includes both 'participant_id:<id>' and raw '<id>' tokens.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "participant_emails": {
+      "type": "STRING",
+      "description": "Tokenized participant emails; commonly includes both 'email:<addr>' and raw '<addr>' tokens.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "entity_ids": {
+      "type": "STRING",
+      "description": "Tokenized domain entity IDs relevant to your app (accounts, companies, tickets, projects, etc.). Commonly includes both 'entity_id:<id>' and raw '<id>' tokens.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "participant_at_entity": {
+      "type": "STRING",
+      "description": "Tokenized participant/entity relationship pairs; commonly includes both 'participant_id:<p>@entity_id:<e>' and '<p>@<e>' tokens.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "record_ids": {
+      "type": "STRING",
+      "description": "Tokenized record identifiers (IDs/UUIDs). Recommended to include both a prefixed token (record_id:<id>) and raw token.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "groups": {
+      "type": "STRING",
+      "description": "Optional: group/category labels (e.g., org/team/category). Useful for scoped retrieval.",
+      "allowed_operators": ["equals", "notEquals", "startsWith", "stringContains", "in", "notIn"]
+    },
+    "group_ids": {
+      "type": "STRING",
+      "description": "Optional: tokenized group/category IDs; commonly includes both 'group_id:<id>' and raw '<id>' tokens.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "ancestor_group_ids": {
+      "type": "STRING",
+      "description": "Optional: tokenized ancestor group IDs for hierarchical org/category trees; commonly includes 'ancestor_group_id:<id>' and raw '<id>' tokens.",
+      "allowed_operators": ["stringContains", "startsWith", "equals", "in", "notIn"]
+    },
+    "x-amz-bedrock-kb-source-uri": {
+      "type": "STRING",
+      "description": "Bedrock source URI for the ingested object (often an S3 URI).",
+      "allowed_operators": ["equals", "startsWith", "stringContains", "in", "notIn"]
+    },
+    "x-amz-bedrock-kb-data-source-id": {
+      "type": "STRING",
+      "description": "Bedrock data source id for the ingested object.",
+      "allowed_operators": ["equals", "notEquals", "in", "notIn"]
+    }
+  },
+  "aliases": {
+    "entity_id": {
+      "metadata_key": "entity_ids",
+      "operator": "stringContains",
+      "token_prefix": "entity_id:"
+    },
+    "participant_id": {
+      "metadata_key": "participant_ids",
+      "operator": "stringContains",
+      "token_prefix": "participant_id:"
+    },
+    "email": {
+      "metadata_key": "participant_emails",
+      "operator": "stringContains",
+      "token_prefix": "email:"
+    },
+    "group_id": {
+      "metadata_key": "group_ids",
+      "operator": "stringContains",
+      "token_prefix": "group_id:"
+    },
+    "ancestor_group_id": {
+      "metadata_key": "ancestor_group_ids",
+      "operator": "stringContains",
+      "token_prefix": "ancestor_group_id:"
+    },
+    "record_id": {
+      "metadata_key": "record_ids",
+      "operator": "stringContains",
+      "token_prefix": "record_id:"
+    },
+    "source_uri": {
+      "metadata_key": "x-amz-bedrock-kb-source-uri",
+      "operator": "equals"
+    },
+    "data_source_id": {
+      "metadata_key": "x-amz-bedrock-kb-data-source-id",
+      "operator": "equals"
+    }
+  }
+}

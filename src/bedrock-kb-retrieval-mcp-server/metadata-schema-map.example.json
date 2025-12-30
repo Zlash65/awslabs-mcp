@@ -1,0 +1,4 @@
+{
+  "YOUR_KNOWLEDGE_BASE_ID": "/etc/bedrock-kb/schemas/your-kb.schema.json",
+  "YOUR_OTHER_KNOWLEDGE_BASE_ID": "/etc/bedrock-kb/schemas/your-other-kb.schema.json"
+}

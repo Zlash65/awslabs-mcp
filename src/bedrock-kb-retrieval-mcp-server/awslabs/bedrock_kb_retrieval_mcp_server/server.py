@@ -24,13 +24,30 @@ from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.discovery import (
     DEFAULT_KNOWLEDGE_BASE_TAG_INCLUSION_KEY,
     discover_knowledge_bases,
 )
+from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.filters import (
+    FilterError,
+    build_where_filter,
+    combine_filters_and,
+    validate_raw_filter_against_schema,
+)
 from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.retrieval import (
     query_knowledge_base,
+)
+from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.schema import (
+    MetadataSchemaFile,
+    ResolvedSchema,
+    SchemaMode,
+    SchemaSource,
+    auto_discover_schema_from_results,
+    log_schema_summary,
+    resolve_schema_for_kb,
+    schema_to_implicit_metadata_attributes,
 )
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
-from typing import Annotated, List, Literal, Optional
+from pydantic.fields import FieldInfo
+from typing import Annotated, Any, List, Literal, Optional
 
 
 # Remove all default handlers then add our own
@@ -45,6 +62,29 @@ if kb_search_type_raw is not None:
     if kb_search_type_raw in ('HYBRID', 'SEMANTIC', 'DEFAULT'):
         kb_search_type = kb_search_type_raw  # type: ignore[assignment]
 logger.info(f'Default search type: {kb_search_type} (from BEDROCK_KB_SEARCH_TYPE)')
+
+# Parse filter configuration environment variables
+kb_allow_raw_filter_raw = os.getenv('BEDROCK_KB_ALLOW_RAW_FILTER', 'false')
+kb_allow_raw_filter = kb_allow_raw_filter_raw.strip().lower() in ('true', '1', 'yes', 'on')
+logger.info(
+    f'Raw filter passthrough enabled: {kb_allow_raw_filter} (from BEDROCK_KB_ALLOW_RAW_FILTER)'
+)
+
+kb_schema_map_json_path = os.getenv('BEDROCK_KB_SCHEMA_MAP_JSON')
+kb_schema_default_path = os.getenv('BEDROCK_KB_SCHEMA_DEFAULT_PATH')
+
+kb_implicit_filter_model_arn = os.getenv('BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN')
+
+kb_filter_mode_raw = os.getenv('BEDROCK_KB_FILTER_MODE', 'explicit_then_implicit')
+kb_filter_mode_raw = kb_filter_mode_raw.strip().lower()
+kb_filter_mode: Literal['none', 'explicit_only', 'implicit_only', 'explicit_then_implicit'] = (
+    'explicit_then_implicit'
+)
+if kb_filter_mode_raw in ('none', 'explicit_only', 'implicit_only', 'explicit_then_implicit'):
+    kb_filter_mode = kb_filter_mode_raw  # type: ignore[assignment]
+logger.info(f'Default filter mode: {kb_filter_mode} (from BEDROCK_KB_FILTER_MODE)')
+
+_schema_cache: dict[str, tuple[MetadataSchemaFile, SchemaSource]] = {}
 
 
 global kb_runtime_client
@@ -95,6 +135,122 @@ mcp = FastMCP(
     """,
     dependencies=['boto3'],
 )
+
+
+def _auto_discover_schema(
+    *,
+    knowledge_base_id: str,
+    sample_query: str,
+    sample_k: int,
+) -> MetadataSchemaFile:
+    response = kb_runtime_client.retrieve(
+        knowledgeBaseId=knowledge_base_id,
+        retrievalQuery={'text': sample_query},
+        retrievalConfiguration={
+            'vectorSearchConfiguration': {
+                'numberOfResults': sample_k,
+            }
+        },
+    )
+    results = response.get('retrievalResults') or []
+    if not isinstance(results, list):
+        results = []
+    return auto_discover_schema_from_results(results)
+
+
+def _resolve_schema(
+    *,
+    knowledge_base_id: str,
+    metadata_schema_mode: SchemaMode,
+    metadata_schema_auto_sample_query: str,
+    metadata_schema_auto_sample_k: int,
+) -> ResolvedSchema:
+    resolved = resolve_schema_for_kb(
+        knowledge_base_id=knowledge_base_id,
+        schema_mode=metadata_schema_mode,
+        schema_map_json_path=kb_schema_map_json_path,
+        schema_default_path=kb_schema_default_path,
+        schema_cache=_schema_cache,
+        auto_discover_fn=lambda: _auto_discover_schema(
+            knowledge_base_id=knowledge_base_id,
+            sample_query=metadata_schema_auto_sample_query,
+            sample_k=metadata_schema_auto_sample_k,
+        ),
+    )
+    log_schema_summary(resolved.schema, knowledge_base_id)
+    return resolved
+
+
+def _build_implicit_filter_configuration(
+    *,
+    schema: MetadataSchemaFile,
+) -> dict[str, Any]:
+    if not kb_implicit_filter_model_arn:
+        raise ValueError(
+            'Implicit filtering requires BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN to be set.'
+        )
+    metadata_attributes = schema_to_implicit_metadata_attributes(schema)
+    if not metadata_attributes:
+        raise ValueError('No usable metadata attributes available for implicit filtering.')
+    return {
+        'metadataAttributes': metadata_attributes,
+        'modelArn': kb_implicit_filter_model_arn,
+    }
+
+
+def _unwrap_field_default(value: Any) -> Any:
+    """Unwrap pydantic FieldInfo defaults when tool functions are called directly.
+
+    FastMCP uses pydantic Field(...) in function signatures. When these functions are called
+    directly (as in unit tests), Python assigns the FieldInfo object as the default value.
+    We normalize those to their underlying `.default` values for internal logic.
+    """
+    if isinstance(value, FieldInfo):
+        return value.default
+    return value
+
+
+@mcp.tool(name='DescribeMetadataSchema')
+async def describe_metadata_schema_tool(
+    knowledge_base_id: str = Field(
+        ...,
+        description='The knowledge base ID to inspect. It must be a valid ID from the ListKnowledgeBases tool',
+    ),
+    metadata_schema_mode: Annotated[
+        SchemaMode,
+        Field(
+            description=(
+                "Metadata schema resolution mode. 'static' uses only configured schema files; 'auto' "
+                'falls back to sampling retrieval metadata to infer a schema.'
+            )
+        ),
+    ] = 'auto',
+    metadata_schema_auto_sample_query: str = Field(
+        'the',
+        description='Query used for auto schema discovery (only when metadata_schema_mode=auto).',
+    ),
+    metadata_schema_auto_sample_k: int = Field(
+        10,
+        description='Number of retrieval results to sample for auto schema discovery.',
+    ),
+) -> str:
+    """Describe the effective metadata schema used for filtering/implicit filtering."""
+    metadata_schema_auto_sample_query = _unwrap_field_default(metadata_schema_auto_sample_query)
+    metadata_schema_auto_sample_k = _unwrap_field_default(metadata_schema_auto_sample_k)
+    resolved = _resolve_schema(
+        knowledge_base_id=knowledge_base_id,
+        metadata_schema_mode=metadata_schema_mode,
+        metadata_schema_auto_sample_query=metadata_schema_auto_sample_query,
+        metadata_schema_auto_sample_k=metadata_schema_auto_sample_k,
+    )
+    return json.dumps(
+        {
+            'knowledge_base_id': knowledge_base_id,
+            'schema_source': resolved.source,
+            'cache_hit': resolved.cache_hit,
+            'schema': resolved.schema.model_dump(),
+        }
+    )
 
 
 @mcp.tool(name='ListKnowledgeBases')
@@ -163,6 +319,62 @@ async def query_knowledge_bases_tool(
         None,
         description='The data source IDs to filter the knowledge base by. It must be a list of valid data source IDs from the ListKnowledgeBases tool',
     ),
+    filter_mode: Annotated[
+        Literal['none', 'explicit_only', 'implicit_only', 'explicit_then_implicit'],
+        Field(
+            description=(
+                'How to combine explicit filters (`where`/raw) and implicit filtering. '
+                "'explicit_then_implicit' applies explicit filters when provided, and also enables implicit filtering "
+                'when requested; it composes constraints with AND semantics.'
+            )
+        ),
+    ] = kb_filter_mode,
+    where_join: Annotated[
+        Literal['AND', 'OR'],
+        Field(
+            description=(
+                'How to combine schema-driven `where` constraints. Default is AND (narrow). '
+                'OR is supported within friendly filters only.'
+            )
+        ),
+    ] = 'AND',
+    where: Optional[dict[str, Any]] = Field(
+        None,
+        description=(
+            'Optional schema-driven metadata constraints. Keys are resolved via the metadata schema: '
+            'prefer schema aliases, or use direct metadata keys. Values can be scalars, lists (OR within that '
+            'key), or dicts for operator overrides, e.g. '
+            '{"date": {"gte": "2025-12-01", "lte": "2025-12-31"}, "some_alias": "12345"}.'
+        ),
+    ),
+    filter: Optional[dict[str, Any]] = Field(  # noqa: A002
+        None,
+        description=(
+            'Optional raw Bedrock retrieval filter (RetrievalFilter). '
+            'This is a power-user escape hatch and is only accepted when BEDROCK_KB_ALLOW_RAW_FILTER=true.'
+        ),
+    ),
+    implicit_filter: bool = Field(
+        False,
+        description='Enable Bedrock implicit filtering for this call (requires BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN).',
+    ),
+    metadata_schema_mode: Annotated[
+        SchemaMode,
+        Field(
+            description=(
+                "Metadata schema resolution mode. 'static' uses only configured schema files; 'auto' "
+                'falls back to sampling retrieval metadata to infer a schema.'
+            )
+        ),
+    ] = 'auto',
+    metadata_schema_auto_sample_query: str = Field(
+        'the',
+        description='Query used for auto schema discovery (only when metadata_schema_mode=auto).',
+    ),
+    metadata_schema_auto_sample_k: int = Field(
+        10,
+        description='Number of retrieval results to sample for auto schema discovery.',
+    ),
     search_type: Annotated[
         Literal['HYBRID', 'SEMANTIC', 'DEFAULT'],
         Field(
@@ -199,6 +411,79 @@ async def query_knowledge_bases_tool(
     4. If the response is not relevant, try a different query, knowledge base, and/or data source
     5. After a few attempts, ask the user for clarification or a different query.
     """
+    number_of_results = int(_unwrap_field_default(number_of_results))
+    reranking = bool(_unwrap_field_default(reranking))
+    reranking_model_name = _unwrap_field_default(reranking_model_name)
+    data_source_ids = _unwrap_field_default(data_source_ids)
+    where_join = _unwrap_field_default(where_join)
+    where = _unwrap_field_default(where)
+    filter = _unwrap_field_default(filter)  # noqa: A001
+    implicit_filter = bool(_unwrap_field_default(implicit_filter))
+    metadata_schema_auto_sample_query = _unwrap_field_default(metadata_schema_auto_sample_query)
+    metadata_schema_auto_sample_k = _unwrap_field_default(metadata_schema_auto_sample_k)
+
+    needs_schema = where is not None or filter is not None or implicit_filter
+
+    resolved_schema = None
+    if needs_schema:
+        resolved_schema = _resolve_schema(
+            knowledge_base_id=knowledge_base_id,
+            metadata_schema_mode=metadata_schema_mode,
+            metadata_schema_auto_sample_query=metadata_schema_auto_sample_query,
+            metadata_schema_auto_sample_k=metadata_schema_auto_sample_k,
+        )
+
+    raw_filter = filter
+    if raw_filter is not None:
+        if not kb_allow_raw_filter:
+            raise ValueError(
+                'Raw filter passthrough is disabled. Set BEDROCK_KB_ALLOW_RAW_FILTER=true to enable.'
+            )
+        if resolved_schema is None:
+            raise ValueError(
+                'Raw filters require a resolved metadata schema. Provide a schema via env vars or enable auto mode.'
+            )
+        validation = validate_raw_filter_against_schema(
+            schema=resolved_schema.schema,
+            raw_filter=raw_filter,
+        )
+        if not validation.ok:
+            raise ValueError(validation.error or 'Raw filter validation failed.')
+
+    where_filter = None
+    if resolved_schema is not None:
+        try:
+            where_filter = build_where_filter(
+                schema=resolved_schema.schema,
+                where=where,
+                where_join=where_join,
+            )
+        except FilterError as e:
+            raise ValueError(str(e)) from e
+
+    explicit_filter = combine_filters_and([where_filter, raw_filter])
+
+    implicit_filter_configuration = None
+    if filter_mode in ('implicit_only', 'explicit_then_implicit') and implicit_filter:
+        if resolved_schema is None:
+            resolved_schema = _resolve_schema(
+                knowledge_base_id=knowledge_base_id,
+                metadata_schema_mode=metadata_schema_mode,
+                metadata_schema_auto_sample_query=metadata_schema_auto_sample_query,
+                metadata_schema_auto_sample_k=metadata_schema_auto_sample_k,
+            )
+        implicit_filter_configuration = _build_implicit_filter_configuration(
+            schema=resolved_schema.schema
+        )
+
+    retrieval_filter = None
+    if filter_mode == 'explicit_only':
+        retrieval_filter = explicit_filter
+    elif filter_mode == 'implicit_only':
+        retrieval_filter = None
+    elif filter_mode == 'explicit_then_implicit':
+        retrieval_filter = explicit_filter
+
     return await query_knowledge_base(
         query=query,
         knowledge_base_id=knowledge_base_id,
@@ -209,6 +494,8 @@ async def query_knowledge_bases_tool(
         data_source_ids=data_source_ids,
         search_type=search_type,
         include_metadata=False,
+        retrieval_filter=retrieval_filter,
+        implicit_filter_configuration=implicit_filter_configuration,
     )
 
 
@@ -221,9 +508,12 @@ async def query_knowledge_bases_with_metadata_tool(
         ...,
         description='The knowledge base ID to query. It must be a valid ID from the ListKnowledgeBases tool',
     ),
-    number_of_results: int = Field(
-        6,
-        description='The number of results to return. Prefer smaller values for metadata-driven discovery.',
+    number_of_results: Optional[int] = Field(
+        None,
+        description=(
+            'The number of results to return. Prefer smaller values for metadata-driven discovery. '
+            'If omitted and implicit_filter=true, defaults to 25; otherwise defaults to 6.'
+        ),
     ),
     reranking: bool = Field(
         kb_reranking_enabled,
@@ -240,6 +530,62 @@ async def query_knowledge_bases_with_metadata_tool(
     content_max_chars: Optional[int] = Field(
         600,
         description='If set, truncate returned TEXT content to this many characters to reduce tool output size.',
+    ),
+    filter_mode: Annotated[
+        Literal['none', 'explicit_only', 'implicit_only', 'explicit_then_implicit'],
+        Field(
+            description=(
+                'How to combine explicit filters (`where`/raw) and implicit filtering. '
+                "'explicit_then_implicit' applies explicit filters when provided, and also enables implicit filtering "
+                'when requested; it composes constraints with AND semantics.'
+            )
+        ),
+    ] = kb_filter_mode,
+    where_join: Annotated[
+        Literal['AND', 'OR'],
+        Field(
+            description=(
+                'How to combine schema-driven `where` constraints. Default is AND (narrow). '
+                'OR is supported within friendly filters only.'
+            )
+        ),
+    ] = 'AND',
+    where: Optional[dict[str, Any]] = Field(
+        None,
+        description=(
+            'Optional schema-driven metadata constraints. Keys are resolved via the metadata schema: '
+            'prefer schema aliases, or use direct metadata keys. Values can be scalars, lists (OR within that '
+            'key), or dicts for operator overrides, e.g. '
+            '{"date": {"gte": "2025-12-01", "lte": "2025-12-31"}, "some_alias": "12345"}.'
+        ),
+    ),
+    filter: Optional[dict[str, Any]] = Field(  # noqa: A002
+        None,
+        description=(
+            'Optional raw Bedrock retrieval filter (RetrievalFilter). '
+            'This is a power-user escape hatch and is only accepted when BEDROCK_KB_ALLOW_RAW_FILTER=true.'
+        ),
+    ),
+    implicit_filter: bool = Field(
+        False,
+        description='Enable Bedrock implicit filtering for this call (requires BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN).',
+    ),
+    metadata_schema_mode: Annotated[
+        SchemaMode,
+        Field(
+            description=(
+                "Metadata schema resolution mode. 'static' uses only configured schema files; 'auto' "
+                'falls back to sampling retrieval metadata to infer a schema.'
+            )
+        ),
+    ] = 'auto',
+    metadata_schema_auto_sample_query: str = Field(
+        'the',
+        description='Query used for auto schema discovery (only when metadata_schema_mode=auto).',
+    ),
+    metadata_schema_auto_sample_k: int = Field(
+        10,
+        description='Number of retrieval results to sample for auto schema discovery.',
     ),
     search_type: Annotated[
         Literal['HYBRID', 'SEMANTIC', 'DEFAULT'],
@@ -268,17 +614,97 @@ async def query_knowledge_bases_with_metadata_tool(
     - metadata: Metadata returned by Bedrock Agent Runtime (may be empty depending on KB configuration)
     - score: The relevance score of the document
     """
+    number_of_results = _unwrap_field_default(number_of_results)
+    reranking = bool(_unwrap_field_default(reranking))
+    reranking_model_name = _unwrap_field_default(reranking_model_name)
+    data_source_ids = _unwrap_field_default(data_source_ids)
+    content_max_chars = _unwrap_field_default(content_max_chars)
+    where_join = _unwrap_field_default(where_join)
+    where = _unwrap_field_default(where)
+    filter = _unwrap_field_default(filter)  # noqa: A001
+    implicit_filter = bool(_unwrap_field_default(implicit_filter))
+    metadata_schema_auto_sample_query = _unwrap_field_default(metadata_schema_auto_sample_query)
+    metadata_schema_auto_sample_k = _unwrap_field_default(metadata_schema_auto_sample_k)
+
+    effective_num_results = number_of_results
+    if effective_num_results is None:
+        effective_num_results = 25 if implicit_filter else 6
+
+    needs_schema = where is not None or filter is not None or implicit_filter
+
+    resolved_schema = None
+    if needs_schema:
+        resolved_schema = _resolve_schema(
+            knowledge_base_id=knowledge_base_id,
+            metadata_schema_mode=metadata_schema_mode,
+            metadata_schema_auto_sample_query=metadata_schema_auto_sample_query,
+            metadata_schema_auto_sample_k=metadata_schema_auto_sample_k,
+        )
+
+    raw_filter = filter
+    if raw_filter is not None:
+        if not kb_allow_raw_filter:
+            raise ValueError(
+                'Raw filter passthrough is disabled. Set BEDROCK_KB_ALLOW_RAW_FILTER=true to enable.'
+            )
+        if resolved_schema is None:
+            raise ValueError(
+                'Raw filters require a resolved metadata schema. Provide a schema via env vars or enable auto mode.'
+            )
+        validation = validate_raw_filter_against_schema(
+            schema=resolved_schema.schema,
+            raw_filter=raw_filter,
+        )
+        if not validation.ok:
+            raise ValueError(validation.error or 'Raw filter validation failed.')
+
+    where_filter = None
+    if resolved_schema is not None:
+        try:
+            where_filter = build_where_filter(
+                schema=resolved_schema.schema,
+                where=where,
+                where_join=where_join,
+            )
+        except FilterError as e:
+            raise ValueError(str(e)) from e
+
+    explicit_filter = combine_filters_and([where_filter, raw_filter])
+
+    implicit_filter_configuration = None
+    if filter_mode in ('implicit_only', 'explicit_then_implicit') and implicit_filter:
+        if resolved_schema is None:
+            resolved_schema = _resolve_schema(
+                knowledge_base_id=knowledge_base_id,
+                metadata_schema_mode=metadata_schema_mode,
+                metadata_schema_auto_sample_query=metadata_schema_auto_sample_query,
+                metadata_schema_auto_sample_k=metadata_schema_auto_sample_k,
+            )
+        implicit_filter_configuration = _build_implicit_filter_configuration(
+            schema=resolved_schema.schema
+        )
+
+    retrieval_filter = None
+    if filter_mode == 'explicit_only':
+        retrieval_filter = explicit_filter
+    elif filter_mode == 'implicit_only':
+        retrieval_filter = None
+    elif filter_mode == 'explicit_then_implicit':
+        retrieval_filter = explicit_filter
+
     return await query_knowledge_base(
         query=query,
         knowledge_base_id=knowledge_base_id,
         kb_agent_client=kb_runtime_client,
-        number_of_results=number_of_results,
+        number_of_results=effective_num_results,
         reranking=reranking,
         reranking_model_name=reranking_model_name,
         data_source_ids=data_source_ids,
         search_type=search_type,
         include_metadata=True,
         content_max_chars=content_max_chars,
+        retrieval_filter=retrieval_filter,
+        implicit_filter_configuration=implicit_filter_configuration,
     )
 
 

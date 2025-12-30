@@ -13,7 +13,7 @@
 # limitations under the License.
 import json
 from loguru import logger
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 
 if TYPE_CHECKING:
@@ -37,6 +37,8 @@ async def query_knowledge_base(
     search_type: Literal['HYBRID', 'SEMANTIC', 'DEFAULT'] = 'DEFAULT',
     include_metadata: bool = False,
     content_max_chars: int | None = None,
+    retrieval_filter: dict[str, Any] | None = None,
+    implicit_filter_configuration: dict[str, Any] | None = None,
 ) -> str:
     """# Amazon Bedrock Knowledge Base query tool.
 
@@ -53,6 +55,10 @@ async def query_knowledge_base(
             the request includes an explicit override.
         include_metadata (bool): If True, include Bedrock-returned metadata alongside each result.
         content_max_chars (int | None): If set, truncate returned TEXT content to this many characters.
+        retrieval_filter (dict[str, Any] | None): Optional Bedrock RetrievalFilter object to apply. This is
+            combined with `data_source_ids` filtering using an `andAll` operation.
+        implicit_filter_configuration (dict[str, Any] | None): Optional Bedrock implicitFilterConfiguration to
+            enable implicit metadata filtering using a model ARN and metadata schema.
 
     ## Warning: You must use the `ListKnowledgeBases` tool to get the knowledge base ID and optionally a data source ID first.
 
@@ -79,13 +85,29 @@ async def query_knowledge_base(
     if search_type in ('HYBRID', 'SEMANTIC'):
         retrieve_request['vectorSearchConfiguration']['overrideSearchType'] = search_type  # type: ignore
 
+    filters: list[dict[str, Any]] = []
     if data_source_ids:
-        retrieve_request['vectorSearchConfiguration']['filter'] = {  # type: ignore
-            'in': {
-                'key': 'x-amz-bedrock-kb-data-source-id',
-                'value': data_source_ids,  # type: ignore
+        filters.append(
+            {
+                'in': {
+                    'key': 'x-amz-bedrock-kb-data-source-id',
+                    'value': data_source_ids,  # type: ignore
+                }
             }
-        }
+        )
+    if retrieval_filter:
+        filters.append(retrieval_filter)
+
+    if filters:
+        if len(filters) == 1:
+            retrieve_request['vectorSearchConfiguration']['filter'] = filters[0]  # type: ignore
+        else:
+            retrieve_request['vectorSearchConfiguration']['filter'] = {'andAll': filters}  # type: ignore
+
+    if implicit_filter_configuration:
+        retrieve_request['vectorSearchConfiguration']['implicitFilterConfiguration'] = (  # type: ignore
+            implicit_filter_configuration
+        )
 
     if reranking:
         model_name_mapping = {

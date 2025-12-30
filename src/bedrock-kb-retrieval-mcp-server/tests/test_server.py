@@ -17,6 +17,7 @@
 import json
 import pytest
 from awslabs.bedrock_kb_retrieval_mcp_server.server import (
+    describe_metadata_schema_tool,
     list_knowledge_bases_tool,
     main,
     mcp,
@@ -137,6 +138,8 @@ class TestQueryKnowledgeBasesTool:
             data_source_ids=['ds-12345', 'ds-67890'],
             search_type='DEFAULT',
             include_metadata=False,
+            retrieval_filter=None,
+            implicit_filter_configuration=None,
         )
 
 
@@ -182,7 +185,41 @@ class TestQueryKnowledgeBasesWithMetadataTool:
             search_type='DEFAULT',
             include_metadata=True,
             content_max_chars=200,
+            retrieval_filter=None,
+            implicit_filter_configuration=None,
         )
+
+
+class TestDescribeMetadataSchemaTool:
+    """Tests for the describe_metadata_schema_tool function."""
+
+    @pytest.mark.asyncio
+    @patch('awslabs.bedrock_kb_retrieval_mcp_server.server._resolve_schema')
+    async def test_describe_metadata_schema_tool(self, mock_resolve_schema):
+        """Test that schema description is returned as JSON."""
+        from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.schema import (
+            MetadataFieldSchema,
+            MetadataSchemaFile,
+            ResolvedSchema,
+        )
+
+        schema = MetadataSchemaFile(
+            metadata={'date': MetadataFieldSchema(type='STRING', description='Date')},
+            aliases={},
+        )
+        mock_resolve_schema.return_value = ResolvedSchema(
+            schema=schema, source='default', cache_hit=False
+        )
+
+        result = await describe_metadata_schema_tool(
+            knowledge_base_id='kb-12345',
+            metadata_schema_mode='static',
+        )
+        parsed = json.loads(result)
+        assert parsed['knowledge_base_id'] == 'kb-12345'
+        assert parsed['schema_source'] == 'default'
+        assert parsed['cache_hit'] is False
+        assert parsed['schema']['metadata']['date']['type'] == 'STRING'
 
 
 class TestMain:
