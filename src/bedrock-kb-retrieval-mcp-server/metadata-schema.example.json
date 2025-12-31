@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "implicit_filter": {
+    "include_keys": ["date", "title", "entity_ids", "record_ids", "group_ids"]
+  },
   "metadata": {
     "date": {
       "type": "STRING",

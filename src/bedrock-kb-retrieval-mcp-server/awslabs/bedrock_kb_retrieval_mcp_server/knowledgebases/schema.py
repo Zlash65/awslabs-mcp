@@ -18,13 +18,15 @@ import json
 from dataclasses import dataclass
 from loguru import logger
 from pathlib import Path
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 
 MetadataType = Literal['STRING', 'NUMBER', 'BOOLEAN', 'STRING_LIST']
 SchemaMode = Literal['static', 'auto']
 SchemaSource = Literal['map', 'default', 'auto']
+
+MAX_IMPLICIT_FILTER_METADATA_ATTRIBUTES = 25
 
 
 class MetadataFieldSchema(BaseModel):
@@ -43,6 +45,47 @@ class AliasSchema(BaseModel):
     token_prefix: str | None = None
 
 
+class ImplicitFilterSchemaConfig(BaseModel):
+    """Configuration for Bedrock implicit filtering metadataAttributes.
+
+    Bedrock implicit filtering accepts up to 25 metadata attributes. Our schemas can be larger
+    (for explicit filtering, validation, or debugging). This config allows selecting a safe,
+    curated subset of metadata keys for implicit filtering only.
+    """
+
+    include_keys: list[str] | None = None
+    exclude_keys: list[str] | None = None
+
+    @field_validator('include_keys', 'exclude_keys', mode='before')
+    @classmethod
+    def _normalize_keys(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise TypeError('implicit_filter keys must be a list of strings')
+
+        cleaned: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise TypeError('implicit_filter keys must be a list of strings')
+            stripped = item.strip()
+            if not stripped:
+                raise ValueError('implicit_filter keys must not include empty strings')
+            cleaned.append(stripped)
+
+        # Preserve order while deduplicating.
+        return list(dict.fromkeys(cleaned))
+
+    @model_validator(mode='after')
+    def _check_exclusive(self) -> 'ImplicitFilterSchemaConfig':
+        if self.include_keys and self.exclude_keys:
+            raise ValueError(
+                'Schema implicit_filter cannot set both include_keys and exclude_keys. '
+                'Use include_keys (recommended) or exclude_keys.'
+            )
+        return self
+
+
 class MetadataSchemaFile(BaseModel):
     """Top-level metadata schema file.
 
@@ -55,6 +98,7 @@ class MetadataSchemaFile(BaseModel):
     version: int = 1
     metadata: dict[str, MetadataFieldSchema] = Field(default_factory=dict)
     aliases: dict[str, AliasSchema] = Field(default_factory=dict)
+    implicit_filter: ImplicitFilterSchemaConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -181,8 +225,42 @@ def resolve_schema_for_kb(
 def schema_to_implicit_metadata_attributes(schema: MetadataSchemaFile) -> list[dict[str, Any]]:
     """Convert schema metadata fields into Bedrock implicit filtering metadataAttributes."""
     attributes: list[dict[str, Any]] = []
-    for key, field in schema.metadata.items():
-        if key.startswith('x-amz-'):
+    candidate_keys = [key for key in schema.metadata.keys() if not key.startswith('x-amz-')]
+
+    config = schema.implicit_filter
+
+    if config and config.include_keys:
+        include = config.include_keys
+        invalid_x_amz = [k for k in include if k.startswith('x-amz-')]
+        if invalid_x_amz:
+            raise ValueError(
+                'Schema implicit_filter.include_keys must not include x-amz-* keys '
+                f'(these are excluded automatically): {invalid_x_amz}'
+            )
+        unknown = [k for k in include if k not in schema.metadata]
+        if unknown:
+            raise ValueError(
+                'Schema implicit_filter.include_keys contains unknown metadata keys: '
+                f'{unknown}. Valid keys come from schema.metadata.'
+            )
+        selected_keys = include
+    elif config and config.exclude_keys:
+        exclude = set(config.exclude_keys)
+        selected_keys = [k for k in candidate_keys if k not in exclude]
+    else:
+        selected_keys = candidate_keys
+
+    if len(selected_keys) > MAX_IMPLICIT_FILTER_METADATA_ATTRIBUTES:
+        raise ValueError(
+            f'Implicit filtering supports at most {MAX_IMPLICIT_FILTER_METADATA_ATTRIBUTES} metadata attributes, '
+            f'but the resolved schema selects {len(selected_keys)}. '
+            'Configure schema.implicit_filter.include_keys to a curated subset (recommended), '
+            'or use schema.implicit_filter.exclude_keys to remove low-value fields.'
+        )
+
+    for key in selected_keys:
+        field = schema.metadata.get(key)
+        if field is None:
             continue
         attributes.append(
             {

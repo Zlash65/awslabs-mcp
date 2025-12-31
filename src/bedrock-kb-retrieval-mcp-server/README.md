@@ -130,6 +130,22 @@ To enable implicit filtering on a call, set `implicit_filter=true` and provide a
 
 - `BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN=<arn>`
 
+##### Implicit filtering metadata limits (max 25)
+
+Amazon Bedrock implicit filtering accepts **up to 25** `metadataAttributes`. If your schema defines more
+metadata keys, configure an implicit-filter subset in your schema file:
+
+```json
+{
+  "implicit_filter": {
+    "include_keys": ["date", "year", "month", "company_ids", "user_ids"]
+  }
+}
+```
+
+Use `include_keys` (recommended) to explicitly list the keys Bedrock should consider for implicit filtering,
+or `exclude_keys` to remove low-value fields while keeping the full schema for explicit filtering.
+
 #### Debugging
 
 Use `DescribeMetadataSchema` to inspect the effective schema used for a knowledge base (and whether it came from a static file or auto-discovery).
