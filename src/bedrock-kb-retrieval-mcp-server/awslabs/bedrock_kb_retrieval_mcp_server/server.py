@@ -17,6 +17,10 @@ import boto3
 import json
 import os
 import sys
+from awslabs.bedrock_kb_retrieval_mcp_server.auth0 import (
+    Auth0Config,
+    Auth0JWTTokenVerifier,
+)
 from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.clients import (
     get_bedrock_agent_client,
     get_bedrock_agent_runtime_client,
@@ -46,6 +50,7 @@ from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.schema import (
 )
 from datetime import datetime, timezone
 from loguru import logger
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from pydantic.fields import FieldInfo
@@ -115,6 +120,40 @@ logger.info(
     f'MCP runtime: transport={mcp_transport} host={mcp_host} port={mcp_port} '
     f'stateless_http={mcp_stateless}'
 )
+
+# OAuth / Auth0 configuration (Streamable HTTP only)
+mcp_auth_mode_raw = os.getenv('MCP_AUTH_MODE', 'none').strip().lower()
+mcp_auth_mode: Literal['none', 'oauth'] = 'none'
+if mcp_auth_mode_raw in ('none', 'oauth'):
+    mcp_auth_mode = mcp_auth_mode_raw  # type: ignore[assignment]
+
+auth0_domain = os.getenv('AUTH0_DOMAIN')
+auth0_audience = os.getenv('AUTH0_AUDIENCE')
+mcp_resource_url = os.getenv('MCP_RESOURCE_URL')
+
+auth_settings = None
+token_verifier = None
+if mcp_auth_mode == 'oauth':
+    if mcp_transport != 'streamable-http':
+        raise ValueError('OAuth requires MCP_TRANSPORT=streamable-http for strict enforcement.')
+    if not auth0_domain:
+        raise ValueError('AUTH0_DOMAIN is required when MCP_AUTH_MODE=oauth.')
+    if not auth0_audience:
+        raise ValueError('AUTH0_AUDIENCE is required when MCP_AUTH_MODE=oauth.')
+    if not mcp_resource_url:
+        raise ValueError('MCP_RESOURCE_URL is required when MCP_AUTH_MODE=oauth.')
+
+    auth0_domain = auth0_domain.strip()
+    auth0_audience = auth0_audience.strip()
+    mcp_resource_url = mcp_resource_url.strip()
+
+    auth_settings = AuthSettings(
+        issuer_url=f'https://{auth0_domain}',
+        resource_server_url=mcp_resource_url,
+        required_scopes=None,
+    )
+    token_verifier = Auth0JWTTokenVerifier(config=Auth0Config(domain=auth0_domain, audience=auth0_audience))
+logger.info(f'Auth mode: {mcp_auth_mode} (from MCP_AUTH_MODE)')
 
 # Parse default search type environment variable.
 kb_search_type_raw = os.getenv('BEDROCK_KB_SEARCH_TYPE', 'DEFAULT')
@@ -200,6 +239,8 @@ mcp = FastMCP(
     port=mcp_port,
     streamable_http_path='/mcp',
     stateless_http=mcp_stateless,
+    auth=auth_settings,
+    token_verifier=token_verifier,
 )
 
 

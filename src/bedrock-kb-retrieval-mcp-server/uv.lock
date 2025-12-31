@@ -58,6 +58,7 @@ dependencies = [
     { name = "loguru" },
     { name = "mcp", extra = ["cli"] },
     { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.dev-dependencies]
@@ -78,6 +79,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.23.0" },
     { name = "pydantic", specifier = ">=2.11.1" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.1" },
 ]
 
 [package.metadata.requires-dev]

@@ -228,7 +228,9 @@ class TestMain:
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.mcp')
     def test_main_default(self, mock_mcp):
         """Test the main function with default arguments."""
-        # Set up the mock
+        import awslabs.bedrock_kb_retrieval_mcp_server.server as server
+
+        server.mcp_transport = 'stdio'
 
         # Call the function
         main()

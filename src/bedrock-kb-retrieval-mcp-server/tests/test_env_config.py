@@ -48,6 +48,16 @@ class TestEnvironmentVariableConfig:
             del os.environ['BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN']
         if 'BEDROCK_KB_FILTER_MODE' in os.environ:
             del os.environ['BEDROCK_KB_FILTER_MODE']
+        if 'MCP_AUTH_MODE' in os.environ:
+            del os.environ['MCP_AUTH_MODE']
+        if 'AUTH0_DOMAIN' in os.environ:
+            del os.environ['AUTH0_DOMAIN']
+        if 'AUTH0_AUDIENCE' in os.environ:
+            del os.environ['AUTH0_AUDIENCE']
+        if 'MCP_RESOURCE_URL' in os.environ:
+            del os.environ['MCP_RESOURCE_URL']
+        if 'MCP_TRANSPORT' in os.environ:
+            del os.environ['MCP_TRANSPORT']
 
     def teardown_method(self):
         """Clean up environment variables after each test."""
@@ -65,6 +75,16 @@ class TestEnvironmentVariableConfig:
             del os.environ['BEDROCK_KB_IMPLICIT_FILTER_MODEL_ARN']
         if 'BEDROCK_KB_FILTER_MODE' in os.environ:
             del os.environ['BEDROCK_KB_FILTER_MODE']
+        if 'MCP_AUTH_MODE' in os.environ:
+            del os.environ['MCP_AUTH_MODE']
+        if 'AUTH0_DOMAIN' in os.environ:
+            del os.environ['AUTH0_DOMAIN']
+        if 'AUTH0_AUDIENCE' in os.environ:
+            del os.environ['AUTH0_AUDIENCE']
+        if 'MCP_RESOURCE_URL' in os.environ:
+            del os.environ['MCP_RESOURCE_URL']
+        if 'MCP_TRANSPORT' in os.environ:
+            del os.environ['MCP_TRANSPORT']
 
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_runtime_client')
     @patch('awslabs.bedrock_kb_retrieval_mcp_server.server.get_bedrock_agent_client')

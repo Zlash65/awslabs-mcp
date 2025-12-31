@@ -208,6 +208,28 @@ uv run awslabs.bedrock-kb-retrieval-mcp-server
 ```
 
 The Streamable HTTP MCP endpoint is available at `http://127.0.0.1:9000/mcp`.
+
+## OAuth (Auth0) for Remote Connectors
+
+This server can act as an OAuth-protected resource server for remote MCP clients (e.g., Claude Desktop)
+using Auth0 as the authorization server.
+
+### Environment variables
+
+Enable OAuth enforcement:
+
+- `MCP_AUTH_MODE=oauth`
+- `AUTH0_DOMAIN=<tenant>.<region>.auth0.com` (e.g., `mytenant.us.auth0.com`)
+- `AUTH0_AUDIENCE=https://your-domain.example/mcp` (must match the Auth0 API Identifier exactly)
+- `MCP_RESOURCE_URL=https://your-domain.example/mcp` (the public MCP URL clients connect to)
+
+### Protected resource metadata (RFC 9728)
+
+When OAuth is enabled, the server exposes OAuth Protected Resource Metadata at:
+
+- `GET /.well-known/oauth-protected-resource/mcp`
+
+Make sure your reverse proxy forwards this path to the server (a simple `location / { ... }` proxy is enough).
 ### Windows Installation
 
 For Windows users, the MCP server configuration format is slightly different:
