@@ -13,6 +13,7 @@
 # limitations under the License.
 """awslabs Bedrock Knowledge Base Retrieval MCP Server."""
 
+import boto3
 import json
 import os
 import sys
@@ -43,16 +44,77 @@ from awslabs.bedrock_kb_retrieval_mcp_server.knowledgebases.schema import (
     resolve_schema_for_kb,
     schema_to_implicit_metadata_attributes,
 )
+from datetime import datetime, timezone
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from pydantic.fields import FieldInfo
+from starlette.responses import JSONResponse
 from typing import Annotated, Any, List, Literal, Optional
 
 
 # Remove all default handlers then add our own
 logger.remove()
 logger.add(sys.stderr, level='INFO')
+
+
+def _parse_bool_env(var_name: str, default: bool) -> bool:
+    raw = os.getenv(var_name)
+    if raw is None:
+        return default
+    raw = raw.strip().lower()
+    if raw in ('true', '1', 'yes', 'on'):
+        return True
+    if raw in ('false', '0', 'no', 'off'):
+        return False
+    return default
+
+
+def _parse_int_env(var_name: str, default: int) -> int:
+    raw = os.getenv(var_name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except Exception:
+        return default
+    if value <= 0:
+        return default
+    return value
+
+
+def _parse_transport_env() -> Literal['stdio', 'sse', 'streamable-http']:
+    raw = os.getenv('MCP_TRANSPORT', 'stdio').strip().lower()
+    if raw in ('stdio', 'sse', 'streamable-http'):
+        return raw  # type: ignore[return-value]
+    return 'stdio'
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _check_json_file(path: str) -> None:
+    with open(path, 'r', encoding='utf-8') as f:
+        json.load(f)
+
+
+def _get_boto3_session() -> boto3.Session:
+    profile = os.getenv('AWS_PROFILE')
+    if profile:
+        return boto3.Session(profile_name=profile)
+    return boto3.Session()
+
+
+# MCP HTTP runtime configuration (used when MCP_TRANSPORT=streamable-http)
+mcp_transport: Literal['stdio', 'sse', 'streamable-http'] = _parse_transport_env()
+mcp_host = os.getenv('MCP_HOST', '127.0.0.1').strip() or '127.0.0.1'
+mcp_port = _parse_int_env('PORT', 8000)
+mcp_stateless = _parse_bool_env('MCP_STATELESS', True)
+logger.info(
+    f'MCP runtime: transport={mcp_transport} host={mcp_host} port={mcp_port} '
+    f'stateless_http={mcp_stateless}'
+)
 
 # Parse default search type environment variable.
 kb_search_type_raw = os.getenv('BEDROCK_KB_SEARCH_TYPE', 'DEFAULT')
@@ -134,7 +196,57 @@ mcp = FastMCP(
     - Always verify that the knowledge base ID exists in the ListKnowledgeBases tool response before querying
     """,
     dependencies=['boto3'],
+    host=mcp_host,
+    port=mcp_port,
+    streamable_http_path='/mcp',
+    stateless_http=mcp_stateless,
 )
+
+
+@mcp.custom_route('/health', methods=['GET'])
+async def health(_request):
+    """Basic health check endpoint."""
+    return JSONResponse(
+        {
+            'status': 'ok',
+            'timestamp': _now_iso(),
+            'service': 'awslabs.bedrock-kb-retrieval-mcp-server',
+        }
+    )
+
+
+@mcp.custom_route('/health/ready', methods=['GET'])
+async def health_ready(_request):
+    """Readiness endpoint that validates AWS credentials via STS."""
+    try:
+        schema_map_path = os.getenv('BEDROCK_KB_SCHEMA_MAP_JSON')
+        if schema_map_path:
+            _check_json_file(schema_map_path)
+
+        schema_default_path = os.getenv('BEDROCK_KB_SCHEMA_DEFAULT_PATH')
+        if schema_default_path:
+            _check_json_file(schema_default_path)
+
+        region_name = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION')
+        sts = _get_boto3_session().client('sts', region_name=region_name)
+        sts.get_caller_identity()
+    except Exception as e:
+        return JSONResponse(
+            {
+                'status': 'not_ready',
+                'timestamp': _now_iso(),
+                'service': 'awslabs.bedrock-kb-retrieval-mcp-server',
+                'error': str(e),
+            },
+            status_code=503,
+        )
+    return JSONResponse(
+        {
+            'status': 'ready',
+            'timestamp': _now_iso(),
+            'service': 'awslabs.bedrock-kb-retrieval-mcp-server',
+        }
+    )
 
 
 def _auto_discover_schema(
@@ -710,7 +822,10 @@ async def query_knowledge_bases_with_metadata_tool(
 
 def main():
     """Run the MCP server with CLI argument support."""
-    mcp.run()
+    if mcp_transport == 'stdio':
+        mcp.run()
+        return
+    mcp.run(transport=mcp_transport)
 
 
 if __name__ == '__main__':

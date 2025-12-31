@@ -172,6 +172,42 @@ Configure the MCP server in your MCP client configuration (e.g., for Amazon Q De
   }
 }
 ```
+
+## Running as a Remote HTTP MCP Server (Streamable HTTP)
+
+This server supports both:
+
+- `stdio` (default) for local usage
+- `streamable-http` for remote deployment behind a reverse proxy (recommended for team connectors)
+
+### HTTP runtime environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `stdio` | `stdio`, `sse`, or `streamable-http` |
+| `MCP_HOST` | `127.0.0.1` | Bind address (use `127.0.0.1` behind nginx) |
+| `PORT` | `8000` | HTTP port (used when `MCP_TRANSPORT=streamable-http`) |
+| `MCP_STATELESS` | `true` | Whether Streamable HTTP runs in stateless mode |
+
+### Health endpoints
+
+When running in `streamable-http` mode, the server exposes:
+
+- `GET /health` (basic health check)
+- `GET /health/ready` (readiness check; validates AWS credentials via STS)
+
+### Example: run locally (HTTP)
+
+```bash
+AWS_REGION="us-west-2" \
+MCP_TRANSPORT="streamable-http" \
+MCP_HOST="127.0.0.1" \
+PORT="9000" \
+MCP_STATELESS="true" \
+uv run awslabs.bedrock-kb-retrieval-mcp-server
+```
+
+The Streamable HTTP MCP endpoint is available at `http://127.0.0.1:9000/mcp`.
 ### Windows Installation
 
 For Windows users, the MCP server configuration format is slightly different:
